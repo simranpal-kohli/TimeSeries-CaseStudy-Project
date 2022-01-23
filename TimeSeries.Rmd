@@ -1,0 +1,1725 @@
+---
+title: "Time Series"
+author: "Simranpal"
+date: ""
+output: word_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+x=c('forecast','tidyr','dplyr',"ggplot2","tidyverse",'ggcorrplot','GGally','corrplot','VIM','mice',
+    'ggpubr','tseries','readxl','corpcor','GPArotation','psych','nFactors','outliers','caret','xts',
+    'lubridate','ggfortify','gridExtra','outliers','fpp')
+lapply(x, require, character.only = TRUE)
+
+setwd('D:\\TimeSeriesAnalysis\\Assignment_3')
+```
+
+# Reading dataset  
+## Reading the Data without columnms 
+```{r echo=FALSE}
+ts_df=read.csv('Data.csv',header =  FALSE)
+ts_df[1:5,1:5]
+```
+
+## Read the Column names from "Assignment Data Details.txt" text file
+```{r warning=FALSE}
+column_df=read_tsv('Data Details.txt')
+colnames(column_df)=c("complete_cols")
+column_df=column_df %>% separate(complete_cols, c("A", "B"),sep = ":")
+Column_names73=column_df$A
+Column_names73[74]="class"
+```
+
+## Appending column names to our main data frame i.e. ts_df
+```{r}
+colnames(ts_df)=Column_names73
+```
+
+# Exploratory Analysis  
+## Descriptive summary of dataset
+It appears that all variables are factorial. We need to convert accoringly before building time series model. Also, except Date variable, are variables hold integer values which is the expected type for performing time series analysis.
+```{r}
+glimpse(ts_df)
+```
+
+## Targetting KEY columns from whole dataset
+```{r}
+key_df=ts_df %>% dplyr::select("WSR_PK","T_PK","T_AV","T85","RH85","HT85","T70","KI","TT","SLP","SLP_")
+```
+
+## Replacing ? with NA values
+```{r}
+key_df[key_df == '?'] <- NA
+```
+
+## Counting the sum of all NA values in our dataset.
+```{r echo=FALSE, warning=FALSE}
+apply(key_df,2,function(x) sum(is.na(x)))
+missing_values <- key_df %>% gather(key = "key", value = "val") %>%
+  mutate(is.missing = is.na(val)) %>%
+  group_by(key, is.missing) %>%
+  summarise(num.missing = n()) %>%
+  filter(is.missing==T) %>%
+  select(-is.missing) %>%
+  arrange(desc(num.missing))
+
+
+missing_values %>%
+  ggplot() +
+  geom_bar(aes(x=key, y=num.missing), stat = 'identity') +
+  labs(x='variable', y="number of missing values", title='Number of missing values') +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+```
+
+## Predictive mean matching Algorithm Regressive method of imputing NA
+Here, we have used mice function to impute the NA values to our dataset. Mice function runs the regressive model to find the best replacement for NA values for a column. It runs multiple simulation & build a regressive model to judge the best NA value. We have given m value as 5 which gives 5 best replacement or imputation for NA. method *pmm* refers to predictive mean matching which is an imputation process. After analysis, we found that run 4 gives a better imputation. 
+```{r warning=FALSE, echo=FALSE, results='hide'}
+for(i in 1:ncol(key_df)){
+  key_df[, i] <- as.numeric(as.character(key_df[,i]))
+  # key_df[which(is.na(key_df[,i])==TRUE),i]=mean(key_df[,i],na.rm = TRUE)
+}
+key_new_df <- mice(key_df,m=5,maxit=50,meth='pmm',seed=375)
+key_NONA_df <- complete(key_new_df,4)
+apply(key_NONA_df,2,function(x) sum(is.na(x)))
+```
+
+## Histogram plot
+As per the below plot, many variables seems normally distributed.  
+__Left skewed variables:__ Variables *RH85, T_AV, KI, TT, T85* are left skweed.  
+__Right skewed variables:__ variable *WSK_PK* seems a bit right skweed.
+```{r echo=FALSE,warning=FALSE}
+key_melt_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df))
+ggplot(key_melt_df, aes(x=value, fill=variable)) +
+  geom_histogram()+
+  facet_wrap(variable~.,ncol = 3,scales = "free")
+```
+
+## Boxplot plot  
+As can be seen from below plot, there are few variables which has extreme points
+but we can claim no variable has outliers.  
+__Plot A:__ Variable T85 has few upper extreme points. They have formed a cluster. Also, Variable T70 appears left skewed with lower extreme points. Rest variables in this plot seems normal with no outliers  
+__Plot B:__ Variable TT forms no outlier points. Also, it is left skewed.  
+__Plot C:__ Variable SLP has both upper & lower extreme points.  
+__Plot D__: Variable WSK_PK has cluster of extreme upper points.  
+__Plot E__: Variable SLP_ has cluster of extreme upper & lower points.  
+__Plot F__: Variable HT85 has cluster of extreme lower points. 
+
+```{r echo=FALSE,warning=FALSE}
+key_melt_df_except_H85=key_melt_df %>% filter(variable!="HT85",variable!="SLP",variable!="KI",
+                                              variable!="TT",variable!="WSR_PK",variable!="SLP_")
+
+key_melt_df_H85=key_melt_df %>% filter(variable %in% c("KI","TT"))
+key_melt_df_SLP=key_melt_df %>% filter(variable == "SLP")
+key_melt_df_WSR=key_melt_df %>% filter(variable == "WSR_PK")
+key_melt_df_SLP_=key_melt_df %>% filter(variable == "SLP_")
+key_melt_df_HT85=key_melt_df %>% filter(variable == "HT85")
+
+boxplot_gg=function(df){
+  ggplot(data = df, mapping = aes(x = " ", y = value,color=variable)) +
+  geom_boxplot(outlier.color = "red", outlier.shape = 1) +
+  ggtitle(expression(atop("Boxplot of key variables", atop(italic("With Red Outliers in Tukey Fences Using 3 Times The IQR"))))) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(plot.subtitle = element_text(hjust = 0.5))
+}
+
+plot1=boxplot_gg(key_melt_df_except_H85)
+plot2=boxplot_gg(key_melt_df_H85)
+plot3=boxplot_gg(key_melt_df_SLP)
+plot4=boxplot_gg(key_melt_df_WSR)
+plot5=boxplot_gg(key_melt_df_SLP_)
+plot6=boxplot_gg(key_melt_df_HT85)
+
+ggarrange(plot1,plot2,plot3,plot4,plot5,plot6,labels = c("A", "B", "C","D","E","F"),ncol = 2, nrow = 2)
+```
+
+##-- QQNORM plot  
+As per the multiple plot shown below,  
+__Plot A:__ We can see variable T_AV shows a bit of non uniformity. It's value is
+sidelined compared to normal distributed value.  
+__Plot B:__ Variable SLP_ shows a bit if variation compared to it's normally
+distributed value.  
+__Plot C:__ Variable KI shows a bit of non uniformity compared to it's normal
+distributed value.  
+__Plot D__: Variable SLP is normally distributed.  
+__Plot E__: Variable HT85 shows normal distribution.
+```{r echo=FALSE,warning=FALSE}
+key_melt_1_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df)[1:3])
+key_melt_2_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df)[c(4,5,11)])
+key_melt_3_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df)[7:9])
+key_melt_4_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df)[10])
+key_melt_5_df <- melt(key_NONA_df, measure.vars=colnames(key_NONA_df)[6])
+
+# windows(50,50)
+# par(mfrow=c(2,2))
+qq_1=ggplot(key_melt_1_df, aes(sample = value, colour = variable)) +
+  stat_qq() +
+  stat_qq_line()
+
+qq_2=ggplot(key_melt_2_df, aes(sample = value, colour = variable)) +
+  stat_qq() +
+  stat_qq_line()
+
+qq_3=ggplot(key_melt_3_df, aes(sample = value, colour = variable)) +
+  stat_qq() +
+  stat_qq_line()
+
+qq_4=ggplot(key_melt_4_df, aes(sample = value, colour = variable)) +
+  stat_qq() +
+  stat_qq_line()
+
+qq_5=ggplot(key_melt_5_df, aes(sample = value, colour = variable)) +
+  stat_qq() +
+  stat_qq_line()
+
+qq_fig=ggarrange(qq_1,qq_2,qq_3,qq_4, qq_5,labels = c("A", "B", "C","D","E"),ncol = 2, nrow = 2)
+qq_fig
+```
+
+# ---------------------------Model Building for variables--------------------------------------  
+## Including date column to our dataset in order to build a model with dates.
+```{r}
+key_date_df=cbind("Date"=ts_df$Date,key_NONA_df)
+head(key_date_df)
+# Confirming if date column has any NA values or not
+apply(key_date_df,2,function(x) sum(is.na(x)))
+```
+
+# Forecasting important variables:
+__Converting the date column into date type__
+```{r}
+class(key_date_df$Date)
+key_date_df$Date=as.Date(key_date_df$Date,format="%m/%d/%Y")
+class(key_date_df$Date)
+```
+
+## Converting Daily data into Monthly Data Manually:  
+Here, we have defined a function __*convert_daily_to_monthly*__ which converts our daily data to monthly data. The reason for converting daily data to monthly data because we are unable to interpret important seasonal components in daily data. Generally, sometimes seasons are present in weekly data or monthly data or both which are hard to predict using daily data. Therefore, a proper approach is required to convert daily data into monthly data. Our function _convert_daily_to_monthly_ finds the mean value for each month of each year & iterates over loop to find mean of date starting from (2019,1,1) to (2004,31,1)       
+[https://stats.stackexchange.com/questions/14742/auto-arima-with-daily-data-how-to-capture-seasonality-periodicity]
+```{r warning=FALSE}
+convert_daily_to_monthly=function(column){
+  new_df=data.frame("date"=character(),"Column"=numeric())
+  for(year in 1998:2004){
+    for(month in 1:length(unique(month(key_date_df$Date)))){
+      columnbind_df=data.frame("column"=numeric())
+      
+      Specific_month = key_date_df[which(year(key_date_df$Date)==year & month(key_date_df$Date)==month),]
+      new_1_df=data.frame("date"=as.yearmon(paste(year, month), "%Y %m"),"column"=mean(Specific_month[,column]))
+      new_df=rbind(new_df,new_1_df)
+    }
+  }  
+  ts_obj=ts(new_df[,2],start = c(1998,1), frequency = 12)
+  return(ts_obj)
+}
+```
+
+
+## Common functions: 
+Here we have converted most of the long codes into a function so as to not to repeat over codes for all the 11 variables for forecasting.
+```{r warning=FALSE}
+residual_plots=function(forecasted){
+  par(mfrow=c(2,2))
+  plot(forecasted$residuals,main="Residual plot")
+  hist(forecasted$residuals)
+  qqnorm(forecasted$residuals)
+  acf(forecasted$residuals[-1],lag.max=20,na.action=na.pass)
+}
+
+compare_histogram=function(HW_forecast, AR_forecast){
+  residual_model <- data.frame("HW"=HW_forecast$residuals,"Arima"=AR_forecast$residuals)
+                             
+  hist_hw <- ggplot(residual_model, aes(x = HW)) +
+  geom_histogram(bins = 15) + theme_bw() +
+  labs(x = "Residuals Holt winter's", y = "Frequence" )
+  
+  hist_ar <- ggplot(residual_model, aes(x = Arima)) +
+  geom_histogram(bins = 15)+ theme_bw() +
+  labs(x = "Residuals Arima", y = "Frequence")
+  
+  grid.arrange(hist_hw, hist_ar)
+}
+
+compare_model=function(HW_forecast,AR_forecast){
+  par(mfrow=c(1,2))
+  plot(HW_forecast)
+  plot(AR_forecast)
+}
+
+compare_acf_pacf=function(HW_forecast,AR_forecast){
+  hw_acf <- ggAcf(HW_forecast$residuals, ci = 0.95, lag.max = 20) + 
+  labs(title = "Residuals Holt winter's (ACF)", y = "ACF" )
+  
+  ar_acf <- ggAcf(AR_forecast$residuals, ci = 0.95, lag.max = 20) + 
+  labs(title = "Residuals Arima (ACF)", y = "ACF" )
+  
+  hw_pacf <- ggPacf(HW_forecast$residuals, ci = 0.95, lag.max = 20) + 
+  labs(title = "Residuals Holt winter's (PACF)", y = "PACF")
+  
+  ar_pacf <- ggPacf(AR_forecast$residuals, ci = 0.95, lag.max = 20) + 
+  labs(title = "Residuals Arima (PACF)", y = "PACF")
+  
+  grid.arrange(hw_acf, ar_acf, hw_pacf, ar_pacf)
+}
+
+compare_residuals=function(HW_forecast, AR_forecast){
+  par(mfrow=c(1,2))
+  plot(HW_forecast$residuals,main="Holtwinters")
+  plot(AR_forecast$residuals,main="Arima") 
+}
+
+column_ts_analyse=function(ts_obj){
+  ts_head=head(ts_obj)
+  ts_kpss=kpss.test(ts_obj)
+  ts_list=list(ts_head,ts_kpss)
+  return(ts_list)
+}
+```
+
+## Cross Validation function
+Here we have generated a common function __cross_validation__ which will find the cross validation for time series data. Best model is fitted to the training set. A similar model is applied to the greater time series data. The fitted values from the last are one-advance forecasts on the collection. In this way, the last part of the fitted qualities vector are one-advance forecasts on the test set.    
+[https://robjhyndman.com/hyndsight/tscvexample/]
+```{r}
+cross_validation=function(ts_obj, model_type){
+  k <- 60 
+n <- length(ts_obj)
+mae <- matrix(NA,12,12)
+s_t <- tsp(ts_obj)[1]+(k-1)/12
+for(i in 1:12)
+{
+  x_short <- window(ts_obj, end=s_t + i/12)
+  x_next <- window(ts_obj, start=s_t + (i+1)/12, end=s_t + (i+12)/12)
+  if(model_type=="Arima"){
+    arima_validate = auto.arima(x_short)
+    best_fit = forecast(arima_validate , h=12)
+    # best_fit <- Arima(x_short, order=c(1,0,0), seasonal=list(order=c(0,1,1),period=12),include.drift=TRUE, lambda=0, method="ML")
+  }
+  else{
+    best_fit=HoltWinters(x_short,beta = F,seasonal='additive')
+  }
+  best_fcast <- forecast(best_fit, h=12)
+  mae[i,] <- abs(best_fcast[['mean']]-x_next)
+}
+return(mean(mae))
+}
+```
+## Column WSR_PK
+
+**Step 1) Column WSR_PK**: It defines the peak value of wind speed of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data.  
+We are converting our data into time-series object using ts() function. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. By default, every time series data has level component. The description for other two component is given below  
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test [https://stats.stackexchange.com/questions/13213/how-to-interpret-kpss-results]:   
+__H0:__ The trend is stationary i.e. there is no trend component  
+__Ha:__ The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ We cannot make out a clear season in our time series dataset. We will build model first without season (Holtwinter considering gamma as FALSE) & then with season & interpret the exact presence of seasons.
+```{r warning=FALSE, echo=FALSE}
+WSR_ts=convert_daily_to_monthly(2)
+column_ts_analyse(WSR_ts)
+autoplot(WSR_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 1.1) WSR_PK Holtwinters Model:** As there is no trend in the WSR_PK time series set, thus we will pass beta parameter as FALSE. 
+The model equation is written as __S{t+1} = alpha * y{t} + (1-alpha) * S{t}__  
+[https://en.wikipedia.org/wiki/Exponential_smoothing].  
+Where S defines forecast value & y defines observed value. This equation can be written as __S{t+1}=S{t}+alpha*E(t)__  where E{t} is the error defined in the previous forecast.  
+Exponential smoothing correponds to three component of time series i.e. level, trend & seasonality.   [https://orangematter.solarwinds.com/2019/12/15/holt-winters-forecasting-simplified/].  
+
+
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.193264* which indicates the that model considers a weight of 0.1932 to forecast the new value. Model has a decent gamma value i.e. _0.4341482_ which indicates recent weights to forecast future value. Coefficients in the model defines the value of "a" for level & 12 seasonal coefficients as we have set the frequency as 12. Positive seasonal coefficient indicates the rise in the graph & -ve seasonal coefficient indicate a fall in the graph. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent RMSE value i.e. 0.3346967.  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+WSR_PK_monthly_HW_model=HoltWinters(WSR_ts,beta = F,seasonal='additive')
+plot(WSR_PK_monthly_HW_model)
+WSR_PK_monthly_HW_model
+
+WSR_PK_monthly_HW=forecast:::forecast.HoltWinters(WSR_PK_monthly_HW_model,h=12) #16.45781
+summary(WSR_PK_monthly_HW)
+plot(WSR_PK_monthly_HW)
+```
+
+**Step 1.2) WSR_PK Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. Also, we are confirming ACF plot which defines whether there is any autocorrelation between residuals or not. 
+
+__Auto correlation function (ACF)__ : It tells if there is any error which are related with each other.
+Ideally, residuals should not have any pattern among themselves. The residuals should not have any correlation on the previous value. On x-axis we have lag & y-axis we have correlation. Y-axis range from -1 to +1, First spike will always be one because first value checks correlation among itself. We can see that few lags have in our ACF plot, we will verify whether this lag is significant or not. For that we will use Box.test Ljung  
+[https://stats.stackexchange.com/questions/64711/ljung-box-statistics-for-arima-residuals-in-r-confusing-test-results].  
+Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis which means there is no dependency among residuals. Hypothesis for box test is as given below
+__H0:__ The values are showing independence among each other. (No Autocorrelation)  
+__Ha:__ The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(WSR_PK_monthly_HW)
+Box.test(as.numeric(WSR_PK_monthly_HW$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 1.3) WSR_PK ARIMA Model:**   __Auto Regressive Integrated Moving Average (ARIMA)__ learns a time series based on its own past values. It reads its own lags & lag errors.   [https://www.machinelearningplus.com/time-series/arima-model-time-series-forecasting-python/]  
+ARIMA model has three terms i.e. p,d,q  
+__p:__ number of AR term  
+__d:__ number of difference needed to convert non stationary time series to stationary.  
+__q:__ number of MA term  
+p defines the number of terms required for forecasting. A weight is assigned to recent values which is multiplied by actual values to forecast.  
+d defines the differencing required by the model to transfer the series into stationary.  
+q defines the number of errors terms required to forecast. Basically, the residual or error value is added up & their mean is calculated. This mean error value (number of q) is added to the actual weighted value (number of p) to forecast future value. If our dataset has seasonal component than another set of (P,D,Q) i.e. seasonl component is added to our model.  
+
+
+__1) Model building__: First, we have run auto.arima() passing monthly time series object as the parameter. __auto.arima__ finds the best combination of (p,d,q) for trend components & (p,d,q)(P,D,Q)[M] for trend + seasonal components. As we have discussed above the important of p,d,q.
+Our model iterates over number of combination of (p,d,q) & finds the best (p,d,q) which has least drift. As can be seen from below output we have got __ARIMA(0,0,0)(0,1,2)[12]__ as the best combination with least drift. The first term (0,0,0) means  
+__p=0__: Means model is not dependent on Arithmetic regressor i.e. not dependent on previous records.   __d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+Model gives AIC as 57.17. Now we will build our model by passing (0,0,0) as orders & (0,1,2) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 0.3193__ & it forcast & gives 12 points. 
+```{r echo=FALSE, warning=FALSE}
+auto.arima(WSR_ts)
+WSR_PK_monthly_AR_model=arima(WSR_ts,order=c(0,0,0),seasonal = c(0,1,2))
+WSR_PK_monthly_AR_forecast=forecast:::forecast.Arima(WSR_PK_monthly_AR_model,h=12)
+plot(WSR_PK_monthly_AR_forecast)
+```
+
+**Step 1.4) WSR_PK Arima Residuals assumption:**
+In order to judge the residuals follow normal distribution, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. Also, we are confirming ACF plot which defines whether there is any autocorrelation between residuals or not. 
+
+__Auto correlation function (ACF)__ :  We can see from the acf plot that few lags, we will verify whether this lag is significant or not. For that we will use Box.test Ljung. As our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+__H0:__ The values are showing independence among each other. (No Autocorrelation)  
+__Ha:__ The values are showing dependency among themselves.  (Autocorrelation)   
+Also, it is clear from histogram & qqnorm that our residuals follow normal distribution.
+
+```{r}
+residual_plots(WSR_PK_monthly_AR_forecast)
+Box.test(resid(WSR_PK_monthly_AR_forecast),type="Ljung",lag = 20)
+```
+**Step 1.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.    
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.3346967__  
+
+__Arima Model__: Model gives AIC as 57.17. Now we will build our model by passing (0,0,0) as orders & (0,1,2) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.3193__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(WSR_PK_monthly_HW,WSR_PK_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(WSR_PK_monthly_HW,WSR_PK_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: The histogram plots are normally distributed for both arima & holtwinters.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(WSR_PK_monthly_HW,WSR_PK_monthly_AR_forecast)
+```
+
+
+__Comparing ACF & PACF Residuals plot__:As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & PACF is better for ARIMA plot.
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(WSR_PK_monthly_HW,WSR_PK_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis, we conclude that ARIMA performs better for variable **WSR_PK**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.3452099_
+
+```{r}
+cross_validation(ts_obj = WSR_ts,model_type = "Arima")
+```
+
+## Column T_PK
+
+**Step 2) Column T_PK**: It defines the peak value of temperature of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data.  
+We are converting our data into time-series object using ts() function. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.   
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE) & interpret the exact presence of seasons.
+```{r warning=FALSE, echo=FALSE}
+T_PK_ts=convert_daily_to_monthly(3)
+column_ts_analyse(T_PK_ts)
+autoplot(T_PK_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 2.1) T_PK Holtwinters Model:** As there is no trend in the T_PK time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.1589879* which indicates that the model considers a weight of 0.1589879 to forecast the value based on level component. Model has a decent gamma value i.e. _0.4620769_ which indicates weights required to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. Positive seasonal coefficient indicates the rise in the graph & -ve seasonal coefficient indicate a fall in the graph. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 1.759988.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+T_PK_monthly_HW_model=HoltWinters(T_PK_ts,beta = F,seasonal='additive')
+plot(T_PK_monthly_HW_model)
+T_PK_monthly_HW_model
+
+T_PK_monthly_HW_forecast=forecast:::forecast.HoltWinters(T_PK_monthly_HW_model,h=12)
+summary(T_PK_monthly_HW_forecast)
+plot(T_PK_monthly_HW_forecast)
+```
+
+**Step 2.2) T_PK Holtwinters Residuals assumption:**
+In order to judge the residuals to follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. Also, we are confirming ACF plot which defines whether there is any autocorrelation between residuals or not. 
+
+__Auto correlation function (ACF)__ : Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box test is as given below    
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T_PK_monthly_HW_forecast)
+Box.test(as.numeric(T_PK_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 2.3) T_PK ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(1,1,0)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider recent 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 292.09. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 1.568613__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(T_PK_ts)
+T_PK_monthly_AR_model=arima(T_PK_ts,order=c(1,0,0),seasonal = c(1,1,0))
+T_PK_monthly_AR_forecast=forecast:::forecast.Arima(T_PK_monthly_AR_model,h=12)
+summary(T_PK_monthly_AR_forecast)
+plot(T_PK_monthly_AR_forecast)
+```
+
+**Step 2.4) T_PK Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & hence claim that there is no dependency among residuals. Also, it is clear from histogram & qqnorm that our residuals follow normal distribution. In order to cross check the normality test, we will do shapiro test. As the p-value is greater than 0.05, we claim that residuals follow normal distribution.
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T_PK_monthly_AR_forecast)
+shapiro.test(T_PK_monthly_AR_forecast$residuals)
+```
+
+**Step 2.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.759988__  
+
+__Arima Model__: Model gives AIC as 292.09. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.568613__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(T_PK_monthly_HW_forecast,T_PK_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(T_PK_monthly_HW_forecast,T_PK_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: It seems that residuals are normally distributed for both the model
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(T_PK_monthly_HW_forecast,T_PK_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & PACF is better for ARIMA plot.
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(T_PK_monthly_HW_forecast,T_PK_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that ARIMA performs better for variable **T_PK**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 1.029222_
+
+```{r}
+cross_validation(ts_obj = T_PK_ts,model_type = "Arima")
+```
+
+## Column T_AV
+
+**Step 3) Column T_AV**: It defines the Average value of temperature of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+T_AV_ts=convert_daily_to_monthly(4)
+column_ts_analyse(T_AV_ts)
+autoplot(T_AV_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 3.1) T_AV Holtwinters Model:** As there is no trend in the T_AV time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.08528599* which indicates that the model considers a weight of 0.1589879 to forecast the value based on level component. Model has a decent gamma value i.e. _0.3410035_ which indicates weights to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see almost half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 1.588915.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+T_AV_monthly_HW_model=HoltWinters(T_AV_ts,beta = F,seasonal='additive')
+plot(T_AV_monthly_HW_model)
+T_AV_monthly_HW_model
+
+T_AV_monthly_HW_forecast=forecast:::forecast.HoltWinters(T_AV_monthly_HW_model,h=12)
+summary(T_AV_monthly_HW_forecast)
+plot(T_AV_monthly_HW_forecast)
+```
+
+**Step 3.2) T_AV Holtwinters Residuals assumption:**
+In order to judge the residuals to follow normal distribution, we can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__ : As there are not points above or below threshold, thus we will not perform box test.
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T_AV_monthly_HW_forecast)
+```
+
+**Step 3.3) T_AV ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(1,1,0)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 285.14. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 1.497851__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(T_AV_ts)
+T_AV_monthly_AR_model=arima(T_AV_ts,order=c(1,0,0),seasonal = c(1,1,0))
+T_AV_monthly_AR_forecast=forecast:::forecast.Arima(T_AV_monthly_AR_model,h=12)
+summary(T_AV_monthly_AR_forecast)
+plot(T_AV_monthly_AR_forecast)
+```
+
+**Step 3.4) T_AV Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Also, it is clear from histogram & qqnorm that our residuals follow normal distribution.
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T_AV_monthly_AR_forecast)
+```
+
+**Step 3.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.588915__  
+
+__Arima Model__: Model gives AIC of 285.14. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.497851__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(T_AV_monthly_HW_forecast,T_AV_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(T_AV_monthly_HW_forecast,T_AV_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike there is a bit less distribution for residuals of arima model.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(T_AV_monthly_HW_forecast,T_AV_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF & PACF is better for holtwinter & ARIMA model.
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(T_AV_monthly_HW_forecast,T_AV_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that ARIMA performs better for variable **T_AV**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 1.194423_
+
+```{r}
+cross_validation(ts_obj = T_AV_ts,model_type = "Arima")
+```
+
+
+
+
+## Column T85
+
+**Step 4) Column T85**: It defines the temperature at 850 hpa of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+T85_ts=convert_daily_to_monthly(5)
+column_ts_analyse(T85_ts)
+autoplot(T85_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 4.1) T85 Holtwinters Model:** As there is no trend in the T85 time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.0940376* which indicates that model considers a weight of 0.0940376 to forecast the value based on level component. This value is very low which means our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.2946111_ which indicates weights to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a __RMSE value of 1.171853.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+T85_monthly_HW_model=HoltWinters(T85_ts,beta = F,seasonal='additive')
+plot(T85_monthly_HW_model)
+T85_monthly_HW_model
+
+T85_monthly_HW_forecast=forecast:::forecast.HoltWinters(T85_monthly_HW_model,h=12)
+summary(T85_monthly_HW_forecast)
+plot(T85_monthly_HW_forecast)
+```
+
+**Step 4.2) T85 Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution, we can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals, as both plot shows a sign of non uniform distribution, We will test shapiro test of normality. As per the shapiro test, we will claim that the residuals follow normal distribution.
+
+__Auto correlation function (ACF)__ : Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T85_monthly_HW_forecast)
+shapiro.test(T85_monthly_HW_forecast$residuals)
+Box.test(as.numeric(T85_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 4.3) T85 ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(0,1,1)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC of 251.33. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 1.123105__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(T85_ts)
+T85_monthly_AR_model=arima(T85_ts,order=c(1,0,0),seasonal = c(0,1,1))
+T85_monthly_AR_forecast=forecast:::forecast.Arima(T85_monthly_AR_model,h=12)
+summary(T85_monthly_AR_forecast)
+plot(T85_monthly_AR_forecast)
+```
+
+**Step 4.4) T85 Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Also, it is clear from histogram & qqnorm that our residuals follow normal distribution.
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T85_monthly_AR_forecast)
+Box.test(as.numeric(T85_monthly_AR_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 4.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.171853__  
+
+__Arima Model__: Model gives AIC of 251.33. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.123105__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(T85_monthly_HW_forecast,T85_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(T85_monthly_HW_forecast,T85_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed for both the model residuals.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(T85_monthly_HW_forecast,T85_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & PACF is better for ARIMA plot.
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that ARIMA performs better for variable **T85**.  
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(T85_monthly_HW_forecast,T85_monthly_AR_forecast)
+```
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.972695_
+
+```{r}
+cross_validation(ts_obj = T85_ts,model_type = "Arima")
+```
+
+
+
+## Column RH85
+
+**Step 5) Column RH85**: It defines the Relative humidity value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+RH85_ts=convert_daily_to_monthly(6)
+column_ts_analyse(RH85_ts)
+autoplot(RH85_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 5.1) RH85 Holtwinters Model:** As there is no trend in the RH85 time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.007843659* which indicates that model considers a weight of 0.007843659 to forecast the value based on level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.3378193_ which indicates recent  weights to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 0.08286317.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+RH85_monthly_HW_model=HoltWinters(RH85_ts,beta = F,seasonal='additive')
+plot(RH85_monthly_HW_model)
+RH85_monthly_HW_model
+
+RH85_monthly_HW_forecast=forecast:::forecast.HoltWinters(RH85_monthly_HW_model,h=12)
+summary(RH85_monthly_HW_forecast)
+plot(RH85_monthly_HW_forecast)
+```
+
+**Step 5.2) T85 Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__ : Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(RH85_monthly_HW_forecast)
+Box.test(as.numeric(RH85_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 5.3) T85 ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(2,0,0)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as -188.4. Now we will build our model by passing (1,0,0) as orders & (2,0,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 0.07189515__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(RH85_ts)
+RH85_monthly_AR_model=arima(RH85_ts,order=c(1,0,0),seasonal = c(2,0,0))
+RH85_monthly_AR_forecast=forecast:::forecast.Arima(RH85_monthly_AR_model,h=12)
+summary(RH85_monthly_AR_forecast)
+plot(RH85_monthly_AR_forecast)
+```
+
+**Step 5.4) T85 Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Histogram shows the data is not normal. We will cross verify using shapiro test of normality. We fail to reject null hypothesis & claim that residuals follow normal distribution.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(RH85_monthly_AR_forecast)
+shapiro.test(RH85_monthly_AR_forecast$residuals)
+```
+
+**Step 5.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.08286317__  
+
+__Arima Model__: Model gives AIC of -188.4. Now we will build our model by passing (1,0,0) as orders & (2,0,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.07189515__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(RH85_monthly_HW_forecast,RH85_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(RH85_monthly_HW_forecast,RH85_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike arima which shows residuals is not exactly normal.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(RH85_monthly_HW_forecast,RH85_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter. ACF plot for arima shows a bit of high correlated lags. 
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(RH85_monthly_HW_forecast,RH85_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that ARIMA performs better for variable **RH85**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.07143096_
+
+```{r}
+cross_validation(ts_obj = RH85_ts,model_type = "Arima")
+```
+
+
+## Column HT85
+
+**Step 6) Column HT85**: It defines the Geopotential height at 850 hpa value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+HT85_ts=convert_daily_to_monthly(7)
+HT85_ts=log(HT85_ts)
+column_ts_analyse(HT85_ts)
+autoplot(HT85_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 6.1) HT85 Holtwinters Model:** As there is no trend in the HT85 time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.1104093* which indicates that model considers a weight of 0.1104093 to forecast the based on level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.3248663_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 0.009177313.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+HT85_monthly_HW_model=HoltWinters(HT85_ts,beta = F,seasonal='additive')
+plot(HT85_monthly_HW_model)
+HT85_monthly_HW_model
+
+HT85_monthly_HW_forecast=forecast:::forecast.HoltWinters(HT85_monthly_HW_model,h=12)
+summary(HT85_monthly_HW_forecast)
+plot(HT85_monthly_HW_forecast)
+```
+
+**Step 6.2) HT85 Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__ : Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(HT85_monthly_HW_forecast)
+Box.test(as.numeric(HT85_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 6.3) T85 ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(2,0,0)(1,1,0)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider recent 2 values to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as -436.3. Now we will build our model by passing (2,0,0) as orders & (1,1,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 0.01039752__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(HT85_ts)
+HT85_monthly_AR_model=arima(HT85_ts,order=c(2,0,0),seasonal = c(1,1,0))
+HT85_monthly_AR_forecast=forecast:::forecast.Arima(HT85_monthly_AR_model,h=12)
+summary(HT85_monthly_AR_forecast)
+plot(HT85_monthly_AR_forecast)
+```
+
+**Step 6.4) HT85 Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Histogram shows the residuals is not normal. We will cross verify using shapiro test of normality. We reject null hypothesis & claim that residuals are not normally distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(HT85_monthly_AR_forecast)
+shapiro.test(HT85_monthly_AR_forecast$residuals)
+```
+
+**Step 6.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.009177313__  
+
+__Arima Model__: Model gives AIC of -436.3 Now we will build our model by passing (2,0,0) as orders & (1,1,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.01039752__
+
+As per the above values, we have got less RMSE value for Holtwinter model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(HT85_monthly_HW_forecast,HT85_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(HT85_monthly_HW_forecast,HT85_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike  arima which shows residuals is not  normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(HT85_monthly_HW_forecast,HT85_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for both holtwinter & ARIMA residuals.
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(HT85_monthly_HW_forecast,HT85_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Holtwinters performs better for variable **HT85**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.008707362_
+
+```{r}
+cross_validation(ts_obj = HT85_ts,model_type = "Holtwinters")
+```
+
+
+## Column T70
+
+**Step 7) Column T70**: It defines the T at 700 hpa humidity value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+T70_ts=convert_daily_to_monthly(8)
+column_ts_analyse(T70_ts)
+autoplot(T70_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 7.1) T70 Holtwinters Model:** As there is no trend in the T70 time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.06784735* which indicates that model considers a weight of 0.06784735 to forecast based on level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.1230958_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of "a" & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 1.058179.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+T70_monthly_HW_model=HoltWinters(T70_ts,beta = F,seasonal='additive')
+plot(T70_monthly_HW_model)
+T70_monthly_HW_model
+
+T70_monthly_HW_forecast=forecast:::forecast.HoltWinters(T70_monthly_HW_model,h=12)
+summary(T70_monthly_HW_forecast)
+plot(T70_monthly_HW_forecast)
+```
+
+**Step 7.2) T70 Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__: Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T70_monthly_HW_forecast)
+Box.test(as.numeric(T70_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 7.3) T70 ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(1,1,0)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 248.54. Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 1.17586__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(T70_ts)
+T70_monthly_AR_model=arima(T70_ts,order=c(1,0,0),seasonal = c(1,1,0))
+T70_monthly_AR_forecast=forecast:::forecast.Arima(T70_monthly_AR_model,h=12)
+summary(T70_monthly_AR_forecast)
+plot(T70_monthly_AR_forecast)
+```
+
+**Step 7.4) HT85 Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Histogram shows the residuals are normally distributed. We will cross verify using shapiro test of normality. We reject null hypothesis & claim that residuals are normally distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(T70_monthly_AR_forecast)
+shapiro.test(T70_monthly_AR_forecast$residuals)
+```
+
+**Step 7.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.058179__  
+
+__Arima Model__: Model gives AIC of 248.54 Now we will build our model by passing (1,0,0) as orders & (1,1,0) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 1.17586__
+
+As per the above values, we have got less RMSE value for Holtwinters model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(T70_monthly_HW_forecast,T70_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(T70_monthly_HW_forecast,T70_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike  arima which shows residuals is not  normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(T70_monthly_HW_forecast,T70_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & ARIMA model residuals.
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(T70_monthly_HW_forecast,T70_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Holtwinters performs better for variable **T70**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.8384622_
+
+```{r}
+cross_validation(ts_obj = T70_ts,model_type = "Holtwinters")
+```
+
+
+## Column KI
+
+**Step 8) Column KI**: It defines the K-Index value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+KI_ts=convert_daily_to_monthly(9)
+column_ts_analyse(KI_ts)
+autoplot(KI_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 8.1) KI Holtwinters Model:** As there is no trend in the KI time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.05939949* which indicates that model considers a weight of 0.05939949 to forecast the based on level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.2907495_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of a & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 5.568524.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+KI_monthly_HW_model=HoltWinters(KI_ts,beta = F,seasonal='additive')
+plot(KI_monthly_HW_model)
+KI_monthly_HW_model
+
+KI_monthly_HW_forecast=forecast:::forecast.HoltWinters(KI_monthly_HW_model,h=12)
+summary(KI_monthly_HW_forecast)
+plot(KI_monthly_HW_forecast)
+```
+
+**Step 8.2) KI Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__: Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(KI_monthly_HW_forecast)
+Box.test(as.numeric(KI_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 8.3) KI ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(0,1,1)[12]__ as the best combination with least drift. The first term (1,0,0) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is not dependent on previous errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 248.54. Now we will build our model by passing (1,0,0) as orders & (0,1,1) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 4.672574__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(KI_ts)
+KI_monthly_AR_model=arima(KI_ts,order=c(1,0,0),seasonal = c(0,1,1))
+KI_monthly_AR_forecast=forecast:::forecast.Arima(KI_monthly_AR_model,h=12)
+summary(KI_monthly_AR_forecast)
+plot(KI_monthly_AR_forecast)
+```
+
+**Step 8.4) KI Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Histogram shows the residuals are normal distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(KI_monthly_AR_forecast)
+```
+
+**Step 8.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates 85% confidence interval & light color indicates 95% confidence interval.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 5.568524__  
+
+__Arima Model__: Model gives AIC of 248.54 Now we will build our model by passing (1,0,0) as orders & (0,1,1) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 4.672574__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(KI_monthly_HW_forecast,KI_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(KI_monthly_HW_forecast,KI_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters & arima are normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(KI_monthly_HW_forecast,KI_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & PACF is better for ARIMA plot.
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(KI_monthly_HW_forecast,KI_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Arima performs better for variable **KI**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 4.130087_
+
+```{r}
+cross_validation(ts_obj = KI_ts,model_type = "Arima")
+```
+
+
+
+## Column TT
+
+**Step 9) Column TT**: It defines the T totals value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+TT_ts=convert_daily_to_monthly(10)
+column_ts_analyse(TT_ts)
+autoplot(TT_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 9.1) TT Holtwinters Model:** As there is no trend in the TT time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0* which indicates that model considers a weight of 0 to forecast i.e. no weight for level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.2706479_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of a & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 3.012476.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+TT_monthly_HW_model=HoltWinters(TT_ts,beta = F,seasonal='additive')
+plot(TT_monthly_HW_model)
+TT_monthly_HW_model
+
+TT_monthly_HW_forecast=forecast:::forecast.HoltWinters(TT_monthly_HW_model,h=12)
+summary(TT_monthly_HW_forecast)
+plot(TT_monthly_HW_forecast)
+```
+
+**Step 9.2) TT Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__: Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(TT_monthly_HW_forecast)
+Box.test(as.numeric(TT_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 9.3) TT ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(0,0,1)(0,1,2)[12]__ as the best combination with least drift. The first term (0,0,1) means  
+__p=0__: Means model will not consider recent value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model is dependent on previous 1 errors mean value.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 372.15. Now we will build our model by passing (0,0,1) as orders & (0,1,2) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 2.646393__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(TT_ts)
+TT_monthly_AR_model=arima(TT_ts,order=c(0,0,1),seasonal = c(0,1,2))
+TT_monthly_AR_forecast=forecast:::forecast.Arima(TT_monthly_AR_model,h=12)
+summary(TT_monthly_AR_forecast)
+plot(TT_monthly_AR_forecast)
+```
+
+**Step 9.4) TT Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are no lags & claim that there is no dependency among residuals. Histogram shows the residuals are normal distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(TT_monthly_AR_forecast)
+```
+
+**Step 9.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 3.012476__  
+
+__Arima Model__: Model gives AIC of 372.15 Now we will build our model by passing (0,0,1) as orders & (0,1,2) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 2.646393__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(TT_monthly_HW_forecast,TT_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(TT_monthly_HW_forecast,TT_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters & Arima are normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(TT_monthly_HW_forecast,TT_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & ARIMA model residuals.
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(TT_monthly_HW_forecast,TT_monthly_AR_forecast)
+```
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Arima performs better for variable **TT**. 
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 2.329381_
+
+```{r}
+cross_validation(ts_obj = TT_ts,model_type = "Arima")
+```
+
+
+
+## Column SLP
+
+**Step 10) Column SLP**: It defines the sea level pressure value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+SLP_ts=convert_daily_to_monthly(11)
+SLP_ts=log(SLP_ts)
+column_ts_analyse(SLP_ts)
+autoplot(SLP_ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 10.1) SLP Holtwinters Model:** As there is no trend in the SLP time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.1245518* which indicates that model considers a weight of 0.1245518 to forecast level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.3279369_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of a & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 0.001771152.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+SLP_monthly_HW_model=HoltWinters(SLP_ts,beta = F,seasonal='additive')
+plot(SLP_monthly_HW_model)
+SLP_monthly_HW_model
+
+SLP_monthly_HW_forecast=forecast:::forecast.HoltWinters(SLP_monthly_HW_model,h=12)
+summary(SLP_monthly_HW_forecast)
+plot(SLP_monthly_HW_forecast)
+```
+
+**Step 10.2) SLP Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__: Our p-value is greater than 0.05, that means we will fail to reject the null hypothesis & claim that there is no dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(SLP_monthly_HW_forecast)
+Box.test(as.numeric(SLP_monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 10.3) SLP ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,1)(0,1,1)[12]__ as the best combination with least drift. The first term (1,0,1) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model will consider 1 value for mean error.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as -683.01. Now we will build our model by passing (1,0,1) as orders & (0,1,1) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 0.003899016__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(SLP_ts)
+SLP_monthly_AR_model=arima(SLP_ts,order=c(1,0,1),seasonal = c(0,1,1))
+SLP_monthly_AR_forecast=forecast:::forecast.Arima(SLP_monthly_AR_model,h=12)
+summary(SLP_monthly_AR_forecast)
+plot(SLP_monthly_AR_forecast)
+```
+
+**Step 10.4) SLP Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are many lags & claim that there is a dependency among residuals. Histogram shows the residuals are not normally distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(SLP_monthly_AR_forecast)
+Box.test(as.numeric(SLP_monthly_AR_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 10.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.001771152__  
+
+__Arima Model__: Model gives AIC of -683.01 Now we will build our model by passing (1,0,1) as orders & (0,1,2) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 0.003899016__
+
+As per the above values, we have got less RMSE value for Holtwinters model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(SLP_monthly_HW_forecast,SLP_monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(SLP_monthly_HW_forecast,SLP_monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike arima which shows residuals is not  normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(SLP_monthly_HW_forecast,SLP_monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. We can see that ACF is better for holtwinter & PACF is better for ARIMA plot.
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(SLP_monthly_HW_forecast,SLP_monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Holtwinters performs better for variable **SLP**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 0.001571755_
+```{r}
+cross_validation(ts_obj = SLP_ts,model_type = "Holtwinters")
+```
+
+
+## Column SLP_
+
+**Step 11) Column SLP_**: It defines the Sea level pressure of previous day value of daily data. First, We are calling _convert_daily_to_monthly_ to convert daily data into monthly data. We considered frequency as 
+12 i.e. monthly data. We will now analyse the plot of time-series object. The description of two component is given below.  
+
+1) __Trend:__ There is no clear trend in the data. We will confirm the availability of trend using KPSS.test.  
+H0: The trend is stationary i.e. there is no trend component
+Ha: The trend is not stationary  i.e. there is trend component
+As our p-value is above 0.05, we fail to reject null hypothesis & claim that the trend is stationary.  
+2) __Season:__ As per the plot, we can observe seasonal component presence in our time series dataset. We will build model first with season (Holtwinter considering gamma as TRUE).
+```{r warning=FALSE, echo=FALSE}
+SLP__ts=convert_daily_to_monthly(12)
+column_ts_analyse(SLP__ts)
+autoplot(SLP__ts,xlab='Year',ylab='Peak value of Wind speed')
+```
+
+**Step 11.1) SLP_ Holtwinters Model:** As there is no trend in the SLP_ time series set, thus we will pass beta parameter as FALSE.  
+__1) Model building__: First, we have build the model by considering beta as FALSE as there is no trend in our dataset using HoltWinters function. As per the model summary we can see that alpha value is *0.01415842* which indicates that model considers a weight of 0.01415842 to forecast level component. This value is very low which means, our model gives less weightage to level component to find future values. Model has a gamma value i.e. _0.2116363_ which indicates recent weights to forecast future seasonal component. Coefficients in the model defines the value of a & 12 seasonal coefficients as we have set the frequency as 12. We can clearly see half the coefficients are -ve & half are positive.  
+
+__2) Model Forecasting:__ Second, we will forecast the value using __forecast.HoltWinters__ function. As can be seen in the plot, model has forecasted the value for 12 months (h=12). We will judge the model performance based on RMSE. We got a decent __RMSE value of 3.306513.__  
+
+```{r echo=FALSE,warning=FALSE}
+#using holtwinter's additive model
+SLP__monthly_HW_model=HoltWinters(SLP__ts,beta = F,seasonal='additive')
+plot(SLP__monthly_HW_model)
+SLP__monthly_HW_model
+
+SLP__monthly_HW_forecast=forecast:::forecast.HoltWinters(SLP__monthly_HW_model,h=12)
+summary(SLP__monthly_HW_forecast)
+plot(SLP__monthly_HW_forecast)
+```
+
+**Step 11.2) SLP_ Holtwinters Residuals assumption:**
+In order to judge the residuals follow normal distribution. We can see that plot of residuals is random & shows no specific pattern. Also, we are plotting histogram & qqnorm of residuals. We claim that residual follows the normal distribution. 
+
+__Auto correlation function (ACF)__: Our p-value is greater than 0.05, that means we will reject the null hypothesis & claim that there is dependency among residuals. Hypothesis for box,test is as given below  
+H0: The values are showing independence among each other. (No Autocorrelation)  
+Ha: The values are showing dependency among themselves.  (Autocorrelation) 
+```{r echo=FALSE, warning=FALSE}
+residual_plots(SLP__monthly_HW_forecast)
+Box.test(as.numeric(SLP__monthly_HW_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 11.3) SLP ARIMA Model:**  
+__1) Model building__: As can be seen from below output we have got __ARIMA(1,0,0)(0,0,1)[12]__ as the best combination with least drift. The first term (1,0,1) means  
+__p=0__: Means model will consider last 1 value to predict.  
+__d=0__: Means differencing is not required to convert non stationary to stationary.  
+__q=0__: Means model will not consider value for mean error.  
+__(P,D,Q)__: Means time series has seasonal component in it.  
+
+Model gives AIC as 412.51. Now we will build our model by passing (1,0,0) as orders & (0,0,1) as seasonal components & forecast it considering h=12 which means we want to forecast for next one year.
+Model gives the coefficient value. As can be seen, model has __RMSE of 2.550949__.
+
+```{r echo=FALSE, warning=FALSE}
+auto.arima(SLP__ts)
+SLP__monthly_AR_model=arima(SLP__ts,order=c(1,0,1),seasonal = c(0,1,1))
+SLP__monthly_AR_forecast=forecast:::forecast.Arima(SLP__monthly_AR_model,h=12)
+summary(SLP__monthly_AR_forecast)
+plot(SLP_monthly_AR_forecast)
+```
+
+**Step 11.4) SLP_ Arima Residuals assumption:**
+__Auto correlation function (ACF)__ :  We can see from the acf plot that there are many lags & claim that there is a dependency among residuals. Histogram shows the residuals are normally distributed.  
+H0: Data is normally distributed  
+Ha: Data is not normally distributed
+```{r echo=FALSE, warning=FALSE}
+residual_plots(SLP__monthly_AR_forecast)
+Box.test(as.numeric(SLP__monthly_AR_forecast$residuals),type="Ljung-Box",lag = 20)
+```
+
+**Step 11.5) Model Comparison:** Analysing best model.
+
+__HoltWinters Model__: As can be seen in the plot, the forecasted is in dark color which indicates confidence interval i.e. 80% prediction interval for the forecast & light color indicates 95% prediction interval for the forecast.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 3.306513__  
+
+__Arima Model__: Model gives AIC of 412.51. Now we will build our model by passing (1,0,1) as orders & (0,1,1) as seasonal components.  
+1) __Forecast Period: 12 months__  
+2) __Model RMSE: 2.550949__
+
+As per the above values, we have got less RMSE value for ARIMA model. Now we will analyse model residuals & comment.
+```{r warning=FALSE}
+#-- Model Forecasting---
+compare_model(SLP__monthly_HW_forecast,SLP__monthly_AR_forecast)
+```
+
+__Comparing Residuals plot__: The residuals plots appear random & shows no clear pattern for both Holtwinters & arima. We expect our residual plots to show no pattern.
+```{r}
+compare_residuals(SLP__monthly_HW_forecast,SLP__monthly_AR_forecast)
+```
+
+__Comparing Histogram Residuals plot__: Residuals of Holtwinters are normally distributed unlike  arima which shows residuals is not  normally distributed.
+```{r warning=FALSE}
+#--- Histogram-----
+compare_histogram(SLP__monthly_HW_forecast,SLP__monthly_AR_forecast)
+```
+
+__Comparing ACF Residuals plot__: As discussed above, ACF defines the auto correlation function. Both ACF & PACF perform similar for both the model residuals.
+
+```{r warning=FALSE}
+#--- ACF---
+compare_acf_pacf(SLP__monthly_HW_forecast,SLP__monthly_AR_forecast)
+```
+
+__Final Conclusion on model performance:__ As per the above reports & analysis. We conclude that Arima performs better for variable **SLP_**.  
+__Cross validation on BEST model__: We will use the function which we created above __cross_validation__ to apply cross validation on time series data for the best model. As can be seen from below output, our best model _Mean Absolute Error (MAE) is 2.590468_
+```{r}
+cross_validation(ts_obj = SLP__ts,model_type = "Arima")
+```
+
+
+
+
+
+
+# ---------------------------------Factor Analysis-------------------------------------------
+## Reading the factor analysis excel data using read_excel function of readxl.  
+Here, we have 20 records with 25 variables. We can see that variable __i..1__ & __i..5__ contains similar values. Thus, we will discard one & keep other.
+```{r}
+factor_df=read_excel("Factor Analysis.xls",skip=1)
+head(factor_df)
+dim(factor_df)
+factor_df=factor_df[,!(colnames(factor_df) %in% c("i...5"))]
+```
+
+We can see that all columns are numeric & no column contains any NA value from below summary() plot.
+```{r}
+summary(factor_df)
+```
+
+It is confirmed from below result, that there are no NA values in our data set
+```{r}
+apply(factor_df,2,function(x) sum(is.na(x)))
+```
+
+Here, we will perform normality test using shapiro.test, it's hypothesis is as shown below  
+__H0: Normal Distributed__  
+__Ha: Not Normally Distributed__  
+It's confirmed from below output that few columns are normally distributed & few are not.
+```{r}
+apply(factor_df,2,shapiro.test)
+```
+
+Here, we will check outlier test using grubbs.test, it's hypothesis is as shown below   
+__H0: No Outliers are present__  
+__Ha: Outliers are present__  
+As per below result, no variable contains any outlier point.
+```{r}
+apply(factor_df,2,grubbs.test)
+```
+
+__Correlation__: We will analyse if any variable is highly __correlated or not correlated__. Here, we will build matrix using __cor()__ function. As per the below correlation plot, many value seems above 0.5 range. We will try & remove values after certain range.
+```{r}
+# dev.off()
+factor_df_matrix <- cor(factor_df)
+corr_rounded <- round(factor_df_matrix, 1)
+ggcorrplot(corr_rounded, method = "circle")
+```
+
+
+__Removing correlation value less than 0.3__: Here, we will analyse values below 0.3 i.e. no correlation variables & remove all the columns with a value less than 8 value after analysing. We can see that there are 14 columns after removing less than 0.3 values.
+```{r}
+columns_0.3=apply(abs(factor_df_matrix)<0.3,1,sum)
+factor_0.3_df=factor_df[,names(columns_0.3[columns_0.3<8])]
+dim(factor_0.3_df)
+factor_df_0.3_matrix=cor(factor_0.3_df)
+```
+
+__Correlation: Removing correlation value above 0.8__: Here, we will analyse values above 0.8 i.e. high correlation variables & remove all the columns with a value less than 6 value after analysing. We can see that there are 5 columns after removing more than 0.8 values. Thus we are left with __5__ variables.
+```{r}
+columns_0.9=apply(abs(factor_df_0.3_matrix)>0.8,1,sum)
+factor_0.9_df=factor_0.3_df[,names(columns_0.9[columns_0.9<6])]
+factor_0.9_df=factor_0.9_df[,!(colnames(factor_0.9_df) %in% c("sqrt(x2+z2)"))]
+dim(factor_0.9_df)
+factor_df_0.9_matrix=cor(factor_0.9_df)
+```
+
+
+__KMO Test__: Kaiser Meyer Olkin test defines the measurement of data suitable for factor. The expected value is expected to be more than 0.60. We can see from below output, overall MSA value is 0.69 which is suitable for factor analysis.
+```{r}
+# Assumptions:
+KMO(factor_df_0.9_matrix) #0.69
+```
+
+
+__Cortest Bartlett__: This test defines if there is any variables which are colinear in our dataframe. 
+The hypothesis for the test is as below  
+It is checked at level of significance of 0.001. As per our output, p-value is very less i.e. power of -26, we reject null hypothesis &  we can proceed with factor analysis as this data is applicable for data reduction technique.
+```{r}
+cortest_bartlett=cortest.bartlett(factor_df_0.9_matrix, n=20)
+cortest_bartlett$p.value
+```
+
+__Determinant__: Determinant of a matrix should be greater than 0.00001, in our result we have 0.0002108856 which is quite greater, thus we satisfy one more condition to perform factor analysis.
+```{r}
+# Assumptions:
+det(factor_df_0.9_matrix) # 0.0002108856
+```
+
+
+__Model Building__: Here we will build model considering all 5 variables, & taking rotate as none.  
+We can see in the eigen value graph, for eigen value 1, we have two factors necessary for model building. This can further be verified using the plotnScree plot that 2 factors are sufficient to define the whole datasets. Thus, we will further build our model using 2 factors.
+```{r}
+pc_1 <- principal(factor_0.9_df, nfactors=5, rotate="none")
+plot(pc_1$values, type="b")  
+plotnScree(nScree(pc_1$values))
+
+pc_1.1=principal(factor_0.9_df, nfactors=2, rotate="none")
+```
+
+__Considering Rotation as "VARIMAX"__: First model considers rotation as VARIMAX which maximizes the sum of variance of squared loadings [https://www.statisticshowto.com/varimax-rotation-definition/].  
+The model gives the proportion for variable RC1 as 0.49 & for variable RC2 as 0.48. This means variable RC1 covers 49% variance in the data & variable RC2 covers 48% variance in the data.  
+1) __Uniquenesses__: It ranges from 0 to 1 & it defines the proportion of the variability which is not explained by the factors. We expect a low variance value for the factors to be desirable. As we can see that we have low value of variance in our dataset which accounts good for variability.  
+[https://www.geo.fu-berlin.de/en/v/soga/Geodata-analysis/factor-analysis/A-simple-example-of-FA/index.html]  
+2) __Communality__: Communality is the square of loadings. Loadings signifies correlation between dataframe variables & factors. It is expected to have a High value loadings as it explained the factors very well. Our factors has very high value which can explain our factors well.   
+[https://www.geo.fu-berlin.de/en/v/soga/Geodata-analysis/factor-analysis/A-simple-example-of-FA/index.html]
+```{r}
+pc_2 <- principal(factor_0.9_df, nfactors=2, rotate="varimax")
+print.psych(pc_2, cut = 0.3, sort = TRUE)
+# Uniqueness
+pc_2$uniquenesses
+# Communality
+apply(pc_2$loadings^2,1,sum)
+```
+
+__Considering Rotation as "OBLIMIN"__: Second model considers rotation as OBLIMIN which allows components to hold non zero correlation.  
+[https://www.researchgate.net/post/In_Principal_Component_Analysis_what_are_maximum_iterations_for_convergence_When_do_you_use_Varimax_or_Oblimin_during_rotations]  
+The model gives the proportion for variable TC1 as 0.49 & for variable TC2 as 0.47. This means variable TC1 covers 49% variance in the data & variable TC2 covers 47% variance in the data.  
+1) __Uniquenesses__: As we can see that we have low value of variance in our dataset which accounts good for variability.  
+2) __Communality__: Our factors has good amount of high values for 3 variables & a bit low values for few variables which overall can explain our factors well. 
+After comparing model with varimax & oblimin, we can say model with varimax performs well as it convers 48% of 2nd factor compare to oblimin which covers 47%. Also, we have quite a good high communality value for all the variables which adds to the better model comparison.
+
+```{r}
+pc_3 <- principal(factor_0.9_df, nfactors = 2, rotate = "oblimin", scores = TRUE)
+print.psych(pc_3, cut = 0.3, sort = TRUE)
+# Uniqueness
+pc_3$uniquenesses
+# Communality
+apply(pc_3$loadings^2,1,sum)
+
+head(pc_3$scores)    
+pc_data <- cbind(factor_0.9_df, pc_2$scores)
+```
+
+__Reliability Check__: Here, we will check how reliable our factors based on the features. We will see which factor contributes to the maximum feature variance. Accoringly we will do Reliability test which is done using alpha function of psych package. We first generate the dataframe as can be seen from below code __(RC_1 & RC_2)__ based on the variance max value for that particular feature in the factor value. We also generates key based on the value sign, if the max value is positive, we take key as _+1_ & if it is negative, we take key value as _-1_. Our values are all positive thats why we have taken keys as positive for both the factor reliability test. In the Alpha test, we can see that raw_alpha (which shoudl ideally be greater than 0.7 to 0.8) is 0.97 which indicates good reliability. Also for RC_2 we have R drop greater than 0.3 which indicates that factor correlates very well. 
+```{r}
+RC_1 <- factor_0.9_df[, c(1,2,3)]
+RC_2 <- factor_0.9_df[, c(4,5)]
+
+keys = c(1, 1, 1)
+psych::alpha(RC_1) # 0.91 no value less than 0.3
+# 0.7> good reliability & r.drop<0.3 it doesn't correlate well
+keys = c(1, 1)
+psych::alpha(RC_2)# 0.77 no value less than 0.3
+```
+
+__Interpretation of the factors__: Basically, rotation produces factors with high, low & moderate loadings.  
+Large loading value for Same factor signifies common behaviour in them. As per the below figures, almost all type of rotation has factors with have high correlation.
+[https://www.geo.fu-berlin.de/en/v/soga/Geodata-analysis/factor-analysis/A-simple-example-of-FA/index.html]
+```{r}
+
+par(mfrow = c(1,3))
+plot(pc_1.1$loadings[,1], 
+     pc_1.1$loadings[,2],
+     xlab = "Factor 1", 
+     ylab = "Factor 2", 
+     ylim = c(-1,1),
+     xlim = c(-1,1),
+     main = "No rotation")
+abline(h = 0, v = 0)
+
+plot(pc_2$loadings[,1], 
+     pc_2$loadings[,2],
+     xlab = "Factor 1", 
+     ylab = "Factor 2", 
+     ylim = c(-1,1),
+     xlim = c(-1,1),
+     main = "Varimax rotation")
+
+text(pc_2$loadings[,1]-0.08, 
+     pc_2$loadings[,2]+0.08,
+      colnames(food),
+      col="blue")
+abline(h = 0, v = 0)
+
+plot(pc_3$loadings[,1], 
+     pc_3$loadings[,2],
+     xlab = "Factor 1", 
+     ylab = "Factor 2",
+     ylim = c(-1,1),
+     xlim = c(-1,1),
+     main = "Oblimin rotation")
+abline(h = 0, v = 0)
+```
